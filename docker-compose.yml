@@ -1,0 +1,7 @@
+services:
+  app:
+    build: .
+    container_name: go_scraper
+    # Aqui está a mágica: ele lê o arquivo .env e passa pro container
+    env_file:
+      - .env

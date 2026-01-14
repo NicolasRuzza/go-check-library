@@ -1,152 +1,129 @@
 package main
 
 import (
-	"context"
 	"fmt"
+	"go-check-library/notion"
+	"go-check-library/scraper"
 	"log"
-	"net/http"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/PuerkitoBio/goquery"
-	"github.com/jomei/notionapi"
-)
-
-// --- CONFIGURAÇÕES LIDA DO AMBIENTE ---
-var (
-	notionToken = os.Getenv("NOTION_TOKEN")
-	databaseID  = os.Getenv("DATABASE_ID")
 )
 
 func main() {
-	if notionToken == "" || databaseID == "" {
-		log.Fatal("❌ ERRO: Faltam as variáveis NOTION_TOKEN ou DATABASE_ID")
+	token := os.Getenv("NOTION_TOKEN")
+	dbId := os.Getenv("DATABASE_ID")
+
+	if token == "" || dbId == "" {
+		log.Fatal("Defina NOTION_TOKEN e DATABASE_ID")
 	}
 
-	client := notionapi.NewClient(notionapi.Token(notionToken))
+	notionClient := notion.NewClient(token, dbId)
 
-	// 1. FILTRO: Busca itens com a tag "Último Cap" (ajuste conforme seu Notion)
-	query := &notionapi.DatabaseQueryRequest{
-		Filter: notionapi.PropertyFilter{
-			Property: "Tags",
-			Select: &notionapi.SelectFilterCondition{
-				Equals: "Último Cap",
-			},
-		},
+	siteSelectors := map[string]string{
+		"weebcentral.com": "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
+		"fliptru.com":     "",
+		"tapas.io":        "",
 	}
 
-	fmt.Println("🔍 Consultando Notion...")
-	resp, err := client.Database.Query(context.Background(), notionapi.DatabaseID(databaseID), query)
+	fmt.Println("Buscando no Notion...")
+
+	// 3. Buscar Dados
+	pages, err := notionClient.QueryBooks()
 	if err != nil {
-		log.Fatalf("Erro na consulta: %v", err)
+		log.Fatalf("Falha ao buscar mangás: %v", err)
 	}
 
-	fmt.Printf("📚 Encontradas %d obras para verificar.\n", len(resp.Results))
+	fmt.Printf("Encontrados: %d obras para verificar.\n", len(pages))
 
-	var wg sync.WaitGroup
+	fmt.Print("\n xxxxxxxxx \n\n")
 
-	// 2. PARALELISMO (Goroutines)
-	for _, page := range resp.Results {
-		wg.Add(1)
-		go func(p notionapi.Page) {
-			defer wg.Done()
-			checkManga(client, p)
-		}(page)
+	for _, page := range pages {
+		props := page.Properties
+		url := props.Link.URL
+
+		title := "Sem Título"
+		if len(props.Obra.Title) > 0 {
+			title = props.Obra.Title[0].PlainText
+		}
+
+		lastKnownChapter := props.UltimoCapConhecido.Number
+
+		var selector, domain string
+
+		for forDomain, forSelector := range siteSelectors {
+			if strings.Contains(url, forDomain) {
+				selector = forSelector
+				domain = forDomain
+
+				break
+			}
+		}
+
+		if selector == "" {
+			fmt.Printf("Site (%s) ainda não tratado", url)
+			continue
+		}
+
+		fmt.Printf(
+			"Verificando obra [%s] no site [%s]. (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
+			title, domain, props.Capitulo.Number, lastKnownChapter,
+		)
+
+		chapterFound, err := scraper.ScrapeLatestChapter(url, selector)
+		if err != nil {
+			fmt.Printf("Erro ao ler [%s]: %v\n", title, err)
+			continue
+		}
+
+		if chapterFound > lastKnownChapter {
+			fmt.Printf("NOVO CAPÍTULO ENCONTRADO! [%s] %.1f -> %.1f\n", title, lastKnownChapter, chapterFound)
+
+			updateData := notion.UpdateProperties{
+				UltimoCap: &notion.NumberProperty{
+					Number: chapterFound,
+				},
+				Tags: &notion.SelectProperty{
+					Select: notion.SelectOption{Name: "Novo Cap"},
+				},
+			}
+
+			err := notionClient.UpdateChapter(page.ID, updateData)
+			if err != nil {
+				fmt.Printf("Erro ao salvar no Notion: %v\n", err)
+			} else {
+				fmt.Println("Notion atualizado com sucesso!")
+			}
+		} else if lastKnownChapter == 0 {
+			fmt.Printf("Primeira sincronização para [%s]: %.1f\n", title, chapterFound)
+
+			updateData := notion.UpdateProperties{
+				UltimoCap: &notion.NumberProperty{
+					Number: chapterFound,
+				},
+				// nil para não alterar a tag atual
+				Tags: nil,
+			}
+
+			err := notionClient.UpdateChapter(page.ID, updateData)
+			if err != nil {
+				fmt.Printf("Erro ao salvar no Notion: %v\n", err)
+			} else {
+				fmt.Println("Notion atualizado com sucesso!")
+			}
+		} else {
+			fmt.Printf("Nada novo. %s (Site: %.1f | Notion: %.1f)\n", title, chapterFound, lastKnownChapter)
+		}
+
+		if chapterFound > 0 {
+			fmt.Printf(
+				"[%s] (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
+				title, props.Capitulo.Number, chapterFound,
+			)
+		}
+
+		fmt.Print("\n --------- \n\n")
+
+		time.Sleep(5 * time.Second)
 	}
-
-	wg.Wait()
-	fmt.Println("🏁 Verificação concluída.")
-}
-
-func checkManga(client *notionapi.Client, page notionapi.Page) {
-	props := page.Properties
-
-	// Título (Safety Check)
-	titleList, _ := props["Obra"].(*notionapi.TitleProperty)
-	if len(titleList.Title) == 0 { return }
-	title := titleList.Title[0].Text.Content
-
-	// Link
-	linkProp, ok := props["Link"].(*notionapi.URLProperty)
-	if !ok || linkProp.URL == "" {
-		fmt.Printf("⚠️ [%s] Sem URL cadastrada.\n", title)
-		return
-	}
-	url := linkProp.URL
-
-	// Capítulo Atual no Notion
-	var currentCap float64
-	if numProp, ok := props["Capítulo"].(*notionapi.NumberProperty); ok {
-		currentCap = numProp.Number
-	}
-
-	// 3. SCRAPING
-	latestCap, err := scrapeWeebCentral(url)
-	if err != nil {
-		fmt.Printf("❌ [%s] Erro no scrape: %v\n", title, err)
-		return
-	}
-
-	// 4. LÓGICA DE ATUALIZAÇÃO
-	if latestCap > currentCap {
-		msg := fmt.Sprintf("🚀 [%s] Saiu o Cap %.1f (Você parou no %.1f)", title, latestCap, currentCap)
-		fmt.Println(msg)
-		
-		// Atualiza o Notion
-		updateNotion(client, page.ID, latestCap)
-		
-	} else {
-		fmt.Printf("✅ [%s] Nada novo (%.1f)\n", title, latestCap)
-	}
-}
-
-// Lógica de Scrape (Ajuste o seletor CSS se mudar o site)
-func scrapeWeebCentral(url string) (float64, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-	res, err := client.Do(req)
-	if err != nil { return 0, err }
-	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		return 0, fmt.Errorf("status http %d", res.StatusCode)
-	}
-
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil { return 0, err }
-
-	// SELETOR: Pega o primeiro link dentro da lista de capítulos
-	// Ajuste: #chapter-list a (ou .text-lg, depende do site exato)
-	text := doc.Find("#chapter-list a").First().Text()
-	
-	return extractNumber(text), nil
-}
-
-func updateNotion(client *notionapi.Client, pageID notionapi.PageID, newCap float64) {
-	_, err := client.Page.Update(context.Background(), pageID, &notionapi.PageUpdateRequest{
-		Properties: notionapi.Properties{
-			"Capítulo": notionapi.NumberProperty{Number: newCap},
-			// Opcional: Muda a tag para "Novo"
-			"Tags": notionapi.SelectProperty{
-				Select: notionapi.Option{Name: "Novo"},
-			},
-		},
-	})
-	if err != nil { fmt.Printf("Erro ao salvar no Notion: %v\n", err) }
-}
-
-func extractNumber(text string) float64 {
-	re := regexp.MustCompile(`(\d+(\.\d+)?)`)
-	matches := re.FindStringSubmatch(text)
-	if len(matches) > 1 {
-		val, _ := strconv.ParseFloat(matches[1], 64)
-		return val
-	}
-	return 0
 }

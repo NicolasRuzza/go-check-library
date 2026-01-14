@@ -1,18 +1,23 @@
-# Fase 1: Build
-FROM golang:1.23-alpine AS builder
-WORKDIR /app
-COPY main.go .
-# Inicializa e baixa as libs na hora do build
-RUN go mod init scraper || true && \
-    go get github.com/jomei/notionapi && \
-    go get github.com/PuerkitoBio/goquery && \
-    go mod tidy
-# Compila estático
-RUN CGO_ENABLED=0 GOOS=linux go build -o bot .
+FROM golang:1.26-rc-alpine AS builder
 
-# Fase 2: Run (Imagem final leve)
+WORKDIR /app
+
+COPY . .
+
+RUN if [ ! -f go.mod ]; then go mod init go-check-library; fi
+
+RUN go mod tidy
+
+# Compila
+RUN CGO_ENABLED=0 GOOS=linux go build -o go-check-library main.go
+
 FROM alpine:latest
-WORKDIR /root/
+
+# Instala certificados CA (necessário para fazer requisições HTTPS para o Notion/Sites)
 RUN apk --no-cache add ca-certificates
-COPY --from=builder /app/bot .
-CMD ["./bot"]
+
+WORKDIR /root/
+
+COPY --from=builder /app/go-check-library .
+
+CMD ["./go-check-library"]

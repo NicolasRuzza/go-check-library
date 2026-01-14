@@ -1,7 +1,11 @@
 services:
-  app:
-    build: .
-    container_name: go_scraper
-    # Aqui está a mágica: ele lê o arquivo .env e passa pro container
+  scraper:
+    image: golang:1.26-rc-alpine
+    container_name: go_notion_scraper_dev
+    working_dir: /app
+    volumes:
+      - .:/app
     env_file:
       - .env
+    tty: true
+    command: go run main.go

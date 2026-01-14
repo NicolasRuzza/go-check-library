@@ -44,7 +44,7 @@ func (client *Client) QueryBooks() ([]Page, error) {
 						TagFilterSelect{
 							Property: "Tags",
 							Select: Condition{
-								Equals: "Não Lanca Cap",
+								Equals: "Não Lança Cap",
 							},
 						},
 						TagFilterSelect{

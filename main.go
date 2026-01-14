@@ -61,7 +61,7 @@ func main() {
 		}
 
 		if selector == "" {
-			fmt.Printf("Site (%s) ainda não tratado", url)
+			fmt.Printf("Site (%s) ainda não tratado\n", domain)
 			continue
 		}
 
@@ -76,7 +76,24 @@ func main() {
 			continue
 		}
 
-		if chapterFound > lastKnownChapter {
+		if lastKnownChapter == 0 {
+			fmt.Printf("Primeira sincronização para [%s]: %.1f\n", title, chapterFound)
+
+			updateData := notion.UpdateProperties{
+				UltimoCap: &notion.NumberProperty{
+					Number: chapterFound,
+				},
+				// nil para não alterar a tag atual
+				Tags: nil,
+			}
+
+			err := notionClient.UpdateChapter(page.ID, updateData)
+			if err != nil {
+				fmt.Printf("Erro ao salvar no Notion: %v\n", err)
+			} else {
+				fmt.Println("Notion atualizado com sucesso!")
+			}
+		} else if chapterFound > lastKnownChapter {
 			fmt.Printf("NOVO CAPÍTULO ENCONTRADO! [%s] %.1f -> %.1f\n", title, lastKnownChapter, chapterFound)
 
 			updateData := notion.UpdateProperties{
@@ -86,23 +103,6 @@ func main() {
 				Tags: &notion.SelectProperty{
 					Select: notion.SelectOption{Name: "Novo Cap"},
 				},
-			}
-
-			err := notionClient.UpdateChapter(page.ID, updateData)
-			if err != nil {
-				fmt.Printf("Erro ao salvar no Notion: %v\n", err)
-			} else {
-				fmt.Println("Notion atualizado com sucesso!")
-			}
-		} else if lastKnownChapter == 0 {
-			fmt.Printf("Primeira sincronização para [%s]: %.1f\n", title, chapterFound)
-
-			updateData := notion.UpdateProperties{
-				UltimoCap: &notion.NumberProperty{
-					Number: chapterFound,
-				},
-				// nil para não alterar a tag atual
-				Tags: nil,
 			}
 
 			err := notionClient.UpdateChapter(page.ID, updateData)

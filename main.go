@@ -3,12 +3,25 @@ package main
 import (
 	"fmt"
 	"go-check-library/notion"
+	notionmanager "go-check-library/notion_manager"
 	"go-check-library/scraper"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+const (
+	NumWorkers = 3
+)
+
+var siteSelectors = map[string]string{
+	"weebcentral.com": "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
+	"fliptru.com":     "",
+	"tapas.io":        "",
+}
 
 func main() {
 	token := os.Getenv("NOTION_TOKEN")
@@ -18,27 +31,54 @@ func main() {
 		log.Fatal("Defina NOTION_TOKEN e DATABASE_ID")
 	}
 
-	notionClient := notion.NewClient(token, dbId)
-
-	siteSelectors := map[string]string{
-		"weebcentral.com": "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
-		"fliptru.com":     "",
-		"tapas.io":        "",
-	}
+	nmg := notionmanager.NewNotionManager(token, dbId)
 
 	fmt.Println("Buscando no Notion...")
 
 	// 3. Buscar Dados
-	pages, err := notionClient.QueryBooks()
+	pages, err := nmg.QueryBooks()
 	if err != nil {
 		log.Fatalf("Falha ao buscar mangás: %v", err)
 	}
 
-	fmt.Printf("Encontrados: %d obras para verificar.\n", len(pages))
+	totalBooks := len(pages)
+	fmt.Printf("Encontrados: %d obras para verificar.\n", totalBooks)
 
 	fmt.Print("\n xxxxxxxxx \n\n")
 
+	jobs := make(chan notion.Page, totalBooks)
+	results := make(chan string, totalBooks)
+
+	var wg sync.WaitGroup
+
+	for i := 1; i <= NumWorkers; i++ {
+		wg.Add(1)
+		go ScrapAndSave(nmg, i, jobs, results, &wg)
+	}
+
 	for _, page := range pages {
+		jobs <- page
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	processedCount := 0
+	for result := range results {
+		processedCount++
+		fmt.Println(result)
+	}
+
+	fmt.Println("Processamento finalizado!!!")
+}
+
+func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan notion.Page, results chan<- string, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for page := range jobs {
 		props := page.Properties
 		url := props.Link.URL
 
@@ -49,35 +89,25 @@ func main() {
 
 		lastKnownChapter := props.UltimoCapConhecido.Number
 
-		var selector, domain string
-
-		for forDomain, forSelector := range siteSelectors {
-			if strings.Contains(url, forDomain) {
-				selector = forSelector
-				domain = forDomain
-
-				break
-			}
-		}
-
+		selector, domain := getDomainSelector(url)
 		if selector == "" {
-			fmt.Printf("Site (%s) ainda não tratado\n", domain)
+			fmt.Printf("[Worker %d] Site (%s) ainda não tratado\n", workerId, domain)
 			continue
 		}
 
 		fmt.Printf(
-			"Verificando obra [%s] no site [%s]. (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
-			title, domain, props.Capitulo.Number, lastKnownChapter,
+			"[Worker %d] Verificando obra [%s] no site [%s]. (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
+			workerId, title, domain, props.Capitulo.Number, lastKnownChapter,
 		)
 
 		chapterFound, err := scraper.ScrapeLatestChapter(url, selector)
 		if err != nil {
-			fmt.Printf("Erro ao ler [%s]: %v\n", title, err)
+			fmt.Printf("[Worker %d] Erro ao ler [%s]: %v\n", workerId, title, err)
 			continue
 		}
 
 		if lastKnownChapter == 0 {
-			fmt.Printf("Primeira sincronização para [%s]: %.1f\n", title, chapterFound)
+			fmt.Printf("[Worker %d] Primeira sincronização para [%s]: %.1f\n", workerId, title, chapterFound)
 
 			updateData := notion.UpdateProperties{
 				UltimoCap: &notion.NumberProperty{
@@ -87,14 +117,14 @@ func main() {
 				Tags: nil,
 			}
 
-			err := notionClient.UpdateChapter(page.ID, updateData)
+			err := nmg.UpdateChapter(page.ID, updateData)
 			if err != nil {
-				fmt.Printf("Erro ao salvar no Notion: %v\n", err)
+				fmt.Printf("[Worker %d] Erro ao salvar no Notion: %v\n", workerId, err)
 			} else {
-				fmt.Println("Notion atualizado com sucesso!")
+				fmt.Printf("[Worker %d] Notion atualizado com sucesso!\n", workerId)
 			}
 		} else if chapterFound > lastKnownChapter {
-			fmt.Printf("NOVO CAPÍTULO ENCONTRADO! [%s] %.1f -> %.1f\n", title, lastKnownChapter, chapterFound)
+			fmt.Printf("[Worker %d] NOVO CAPÍTULO ENCONTRADO! [%s] %.1f -> %.1f\n", workerId, title, lastKnownChapter, chapterFound)
 
 			updateData := notion.UpdateProperties{
 				UltimoCap: &notion.NumberProperty{
@@ -105,25 +135,39 @@ func main() {
 				},
 			}
 
-			err := notionClient.UpdateChapter(page.ID, updateData)
+			err := nmg.UpdateChapter(page.ID, updateData)
 			if err != nil {
-				fmt.Printf("Erro ao salvar no Notion: %v\n", err)
+				fmt.Printf("[Worker %d] Erro ao salvar no Notion: %v\n", workerId, err)
 			} else {
-				fmt.Println("Notion atualizado com sucesso!")
+				fmt.Printf("[Worker %d] Notion atualizado com sucesso!\n", workerId)
 			}
 		} else {
-			fmt.Printf("Nada novo. %s (Site: %.1f | Notion: %.1f)\n", title, chapterFound, lastKnownChapter)
+			fmt.Printf("[Worker %d] Nada novo. %s (Site: %.1f | Notion: %.1f)\n", workerId, title, chapterFound, lastKnownChapter)
 		}
 
 		if chapterFound > 0 {
 			fmt.Printf(
-				"[%s] (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
-				title, props.Capitulo.Number, chapterFound,
+				"[Worker %d] [%s] (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
+				workerId, title, props.Capitulo.Number, chapterFound,
 			)
 		}
 
 		fmt.Print("\n --------- \n\n")
 
-		time.Sleep(5 * time.Second)
+		results <- fmt.Sprintf("[Worker %d] Processado: %s", workerId, title)
+
+		// rand.Intn(3) retorna 0, 1 ou 2. Somando 3, temos 3, 4 ou 5.
+		randomDelay := time.Duration(3+rand.Intn(3)) * time.Second
+		time.Sleep(randomDelay)
 	}
+}
+
+func getDomainSelector(url string) (string, string) {
+	for domain, selector := range siteSelectors {
+		if strings.Contains(url, domain) {
+			return selector, domain
+		}
+	}
+
+	return "", ""
 }

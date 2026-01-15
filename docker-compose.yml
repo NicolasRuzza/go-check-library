@@ -8,4 +8,7 @@ services:
     env_file:
       - .env
     tty: true
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     command: go run main.go

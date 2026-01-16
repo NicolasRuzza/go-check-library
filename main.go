@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"go-check-library/logger"
 	"go-check-library/notion"
 	notionmanager "go-check-library/notion_manager"
 	"go-check-library/scraper"
@@ -13,9 +14,7 @@ import (
 	"time"
 )
 
-const (
-	NumWorkers = 3
-)
+const NumWorkers = 3
 
 var siteSelectors = map[string]string{
 	"weebcentral.com": "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
@@ -44,10 +43,8 @@ func main() {
 	totalBooks := len(pages)
 	fmt.Printf("Encontrados: %d obras para verificar.\n", totalBooks)
 
-	fmt.Print("\n xxxxxxxxx \n\n")
-
 	jobs := make(chan notion.Page, totalBooks)
-	results := make(chan string, totalBooks)
+	results := make(chan logger.ScrapeResult, totalBooks)
 
 	var wg sync.WaitGroup
 
@@ -66,16 +63,48 @@ func main() {
 		close(results)
 	}()
 
-	processedCount := 0
+	var allResults []logger.ScrapeResult
+	var errors []logger.ScrapeResult
+	var updates []logger.ScrapeResult
+
 	for result := range results {
-		processedCount++
-		fmt.Println(result)
+		allResults = append(allResults, result)
+
+		// Ao vivo
+		fmt.Println(result.ColoredString())
+
+		if result.Type == logger.ERROR {
+			errors = append(errors, result)
+		}
+		if result.Type == logger.SUCCESS {
+			updates = append(updates, result)
+		}
 	}
 
-	fmt.Println("Processamento finalizado!!!")
+	fmt.Println("\n\n================ RELATÓRIO FINAL ================")
+
+	fmt.Printf("Total Processado: %d\n", len(allResults))
+	fmt.Printf("Sucessos/Atualizações: %d\n", len(updates))
+	fmt.Printf("Erros: %d\n", len(errors))
+
+	if len(updates) > 0 {
+		fmt.Println("\n--- OBRAS ATUALIZADAS ---")
+
+		for _, up := range updates {
+			fmt.Printf("-> %s: %s\n", up.Title, up.Message)
+		}
+	}
+
+	if len(errors) > 0 {
+		fmt.Println("\n--- FALHAS ---")
+
+		for _, err := range errors {
+			fmt.Printf("-> [%s] %s: %s\n", err.Domain, err.Title, err.Message)
+		}
+	}
 }
 
-func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan notion.Page, results chan<- string, wg *sync.WaitGroup) {
+func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan notion.Page, results chan<- logger.ScrapeResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for page := range jobs {
@@ -90,42 +119,29 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 		lastKnownChapter := props.UltimoCapConhecido.Number
 
 		selector, domain := getDomainSelector(url)
-		if selector == "" {
-			fmt.Printf("[Worker %d] Site (%s) ainda não tratado\n", workerId, domain)
-			continue
+
+		resultBase := logger.ScrapeResult{
+			WorkerId: workerId,
+			Domain:   domain,
+			Title:    title,
 		}
 
-		fmt.Printf(
-			"[Worker %d] Verificando obra [%s] no site [%s]. (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
-			workerId, title, domain, props.Capitulo.Number, lastKnownChapter,
-		)
+		if selector == "" {
+			resultBase.Type = logger.WARN
+			resultBase.Message = "Site não mapeado/tratado"
+			results <- resultBase
+			continue
+		}
 
 		chapterFound, err := scraper.ScrapeLatestChapter(url, selector)
 		if err != nil {
-			fmt.Printf("[Worker %d] Erro ao ler [%s]: %v\n", workerId, title, err)
+			resultBase.Type = logger.ERROR
+			resultBase.Message = fmt.Sprintf("Falha no Scraper: %v", err)
+			results <- resultBase
 			continue
 		}
 
-		if lastKnownChapter == 0 {
-			fmt.Printf("[Worker %d] Primeira sincronização para [%s]: %.1f\n", workerId, title, chapterFound)
-
-			updateData := notion.UpdateProperties{
-				UltimoCap: &notion.NumberProperty{
-					Number: chapterFound,
-				},
-				// nil para não alterar a tag atual
-				Tags: nil,
-			}
-
-			err := nmg.UpdateChapter(page.ID, updateData)
-			if err != nil {
-				fmt.Printf("[Worker %d] Erro ao salvar no Notion: %v\n", workerId, err)
-			} else {
-				fmt.Printf("[Worker %d] Notion atualizado com sucesso!\n", workerId)
-			}
-		} else if chapterFound > lastKnownChapter {
-			fmt.Printf("[Worker %d] NOVO CAPÍTULO ENCONTRADO! [%s] %.1f -> %.1f\n", workerId, title, lastKnownChapter, chapterFound)
-
+		if chapterFound > lastKnownChapter && chapterFound > props.Capitulo.Number {
 			updateData := notion.UpdateProperties{
 				UltimoCap: &notion.NumberProperty{
 					Number: chapterFound,
@@ -137,24 +153,56 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 
 			err := nmg.UpdateChapter(page.ID, updateData)
 			if err != nil {
-				fmt.Printf("[Worker %d] Erro ao salvar no Notion: %v\n", workerId, err)
+				resultBase.Type = logger.ERROR
+				resultBase.Message = fmt.Sprintf("Erro ao atualizar novo: %v", err)
 			} else {
-				fmt.Printf("[Worker %d] Notion atualizado com sucesso!\n", workerId)
+				resultBase.Type = logger.SUCCESS
+				resultBase.Message = fmt.Sprintf("Atualizado! %.1f -> %.1f", lastKnownChapter, chapterFound)
 			}
+
+			results <- resultBase
+		} else if lastKnownChapter == 0 {
+			updateData := notion.UpdateProperties{
+				UltimoCap: &notion.NumberProperty{
+					Number: chapterFound,
+				},
+				// nil para não alterar a tag atual
+				Tags: nil,
+			}
+
+			err := nmg.UpdateChapter(page.ID, updateData)
+			if err != nil {
+				resultBase.Type = logger.ERROR
+				resultBase.Message = fmt.Sprintf("Erro ao salvar (1ª carga): %v", err)
+			} else {
+				resultBase.Type = logger.SUCCESS
+				resultBase.Message = fmt.Sprintf("Primeira sincronização: Cap %.1f", chapterFound)
+			}
+
+			results <- resultBase
 		} else {
-			fmt.Printf("[Worker %d] Nada novo. %s (Site: %.1f | Notion: %.1f)\n", workerId, title, chapterFound, lastKnownChapter)
+			if chapterFound != lastKnownChapter {
+				updateData := notion.UpdateProperties{
+					UltimoCap: &notion.NumberProperty{
+						Number: chapterFound,
+					},
+					// nil para não alterar a tag atual
+					Tags: nil,
+				}
+
+				err := nmg.UpdateChapter(page.ID, updateData)
+				if err != nil {
+					resultBase.Type = logger.ERROR
+					resultBase.Message = fmt.Sprintf("Erro ao salvar (1ª carga): %v", err)
+					results <- resultBase
+					continue
+				}
+			}
+
+			resultBase.Type = logger.INFO
+			resultBase.Message = fmt.Sprintf("Nada novo. (Site: %.1f | Notion: %.1f)", chapterFound, lastKnownChapter)
+			results <- resultBase
 		}
-
-		if chapterFound > 0 {
-			fmt.Printf(
-				"[Worker %d] [%s] (Cap Corrente: %.0f | Ult cap conhecido: %.0f)\n",
-				workerId, title, props.Capitulo.Number, chapterFound,
-			)
-		}
-
-		fmt.Print("\n --------- \n\n")
-
-		results <- fmt.Sprintf("[Worker %d] Processado: %s", workerId, title)
 
 		// rand.Intn(3) retorna 0, 1 ou 2. Somando 3, temos 3, 4 ou 5.
 		randomDelay := time.Duration(3+rand.Intn(3)) * time.Second

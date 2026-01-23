@@ -19,7 +19,7 @@ const NumWorkers = 3
 var siteSelectors = map[string]string{
 	"weebcentral.com": "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
 	"fliptru.com":     "",
-	"tapas.io":        "",
+	"tapas.io":        "p.episode-cnt",
 }
 
 func main() {

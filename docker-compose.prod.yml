@@ -1,0 +1,16 @@
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    image: notion-scraper:prod
+    container_name: go_notion_scraper_prod
+    
+    env_file:
+      - .env
+    
+    restart: always
+
+# Roda o modo producao (compila, gera binario leve e sobe)
+# docker compose -f docker-compose.prod.yml up --build -d

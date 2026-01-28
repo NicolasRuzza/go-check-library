@@ -16,10 +16,24 @@ import (
 
 const NumWorkers = 3
 
-var siteSelectors = map[string]string{
-	"weebcentral.com": "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
-	"fliptru.com":     "",
-	"tapas.io":        "p.episode-cnt",
+type SiteConfig struct {
+	Selector   string
+	UseBrowser bool // true -> conteudo dinamico e requer browser. false -> site estatico
+}
+
+var siteConfigs = map[string]SiteConfig{
+	"weebcentral.com": {
+		Selector:   "#chapter-list > div:nth-child(1) > a > span:nth-child(2) > span:nth-child(1)",
+		UseBrowser: false,
+	},
+	"fliptru.com": {
+		Selector:   ".chapter-list-item:nth-child(1) a",
+		UseBrowser: true,
+	},
+	"tapas.io": {
+		Selector:   "p.episode-cnt",
+		UseBrowser: false,
+	},
 }
 
 func main() {
@@ -118,7 +132,7 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 
 		lastKnownChapter := props.UltimoCapConhecido.Number
 
-		selector, domain := getDomainSelector(url)
+		config, domain := getDomainConfig(url)
 
 		resultBase := logger.ScrapeResult{
 			WorkerId: workerId,
@@ -126,14 +140,22 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 			Title:    title,
 		}
 
-		if selector == "" {
+		if config.Selector == "" {
 			resultBase.Type = logger.WARN
 			resultBase.Message = "Site não mapeado/tratado"
 			results <- resultBase
 			continue
 		}
 
-		chapterFound, err := scraper.ScrapeLatestChapter(url, selector)
+		var chapterFound float64
+		var err error
+
+		if config.UseBrowser {
+			chapterFound, err = scraper.ScrapeDynamicPage(url, config.Selector)
+		} else {
+			chapterFound, err = scraper.ScrapeStaticPage(url, config.Selector)
+		}
+
 		if err != nil {
 			resultBase.Type = logger.ERROR
 			resultBase.Message = fmt.Sprintf("Falha no Scraper: %v", err)
@@ -210,12 +232,12 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 	}
 }
 
-func getDomainSelector(url string) (string, string) {
-	for domain, selector := range siteSelectors {
+func getDomainConfig(url string) (SiteConfig, string) {
+	for domain, config := range siteConfigs {
 		if strings.Contains(url, domain) {
-			return selector, domain
+			return config, domain
 		}
 	}
 
-	return "", ""
+	return SiteConfig{}, ""
 }

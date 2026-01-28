@@ -1,8 +1,11 @@
 services:
   scraper:
-    image: golang:1.26-rc-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    image: notion-scraper:dev
     container_name: go_notion_scraper_dev
-    working_dir: /app
     volumes:
       - .:/app
     env_file:
@@ -11,4 +14,3 @@ services:
     dns:
       - 8.8.8.8
       - 8.8.4.4
-    command: go run main.go

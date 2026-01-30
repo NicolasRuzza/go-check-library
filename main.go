@@ -3,8 +3,7 @@ package main
 import (
 	"fmt"
 	"go-check-library/logger"
-	"go-check-library/notion"
-	notionmanager "go-check-library/notion_manager"
+	"go-check-library/notionmng"
 	"go-check-library/scraper"
 	"log"
 	"math/rand"
@@ -44,9 +43,9 @@ func main() {
 		log.Fatal("Defina NOTION_TOKEN e DATABASE_ID")
 	}
 
-	nmg := notionmanager.NewNotionManager(token, dbId)
+	nmg := notionmng.New(token, dbId)
 
-	fmt.Println("Buscando no Notion...")
+	fmt.Println("Buscando no notionmng...")
 
 	// 3. Buscar Dados
 	pages, err := nmg.QueryBooks()
@@ -57,7 +56,7 @@ func main() {
 	totalBooks := len(pages)
 	fmt.Printf("Encontrados: %d obras para verificar.\n", totalBooks)
 
-	jobs := make(chan notion.Page, totalBooks)
+	jobs := make(chan notionmng.Page, totalBooks)
 	results := make(chan logger.ScrapeResult, totalBooks)
 
 	var wg sync.WaitGroup
@@ -118,7 +117,7 @@ func main() {
 	}
 }
 
-func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan notion.Page, results chan<- logger.ScrapeResult, wg *sync.WaitGroup) {
+func ScrapAndSave(nmg *notionmng.NotionService, workerId int, jobs <-chan notionmng.Page, results chan<- logger.ScrapeResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for page := range jobs {
@@ -164,12 +163,12 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 		}
 
 		if chapterFound > lastKnownChapter && chapterFound > props.Capitulo.Number {
-			updateData := notion.UpdateProperties{
-				UltimoCap: &notion.NumberProperty{
+			updateData := notionmng.UpdateProperties{
+				UltimoCap: &notionmng.NumberProperty{
 					Number: chapterFound,
 				},
-				Tags: &notion.SelectProperty{
-					Select: notion.SelectOption{Name: "Novo Cap"},
+				Tags: &notionmng.SelectProperty{
+					Select: notionmng.SelectOption{Name: "Novo Cap"},
 				},
 			}
 
@@ -184,8 +183,8 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 
 			results <- resultBase
 		} else if lastKnownChapter == 0 {
-			updateData := notion.UpdateProperties{
-				UltimoCap: &notion.NumberProperty{
+			updateData := notionmng.UpdateProperties{
+				UltimoCap: &notionmng.NumberProperty{
 					Number: chapterFound,
 				},
 				// nil para não alterar a tag atual
@@ -204,8 +203,8 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 			results <- resultBase
 		} else {
 			if chapterFound != lastKnownChapter {
-				updateData := notion.UpdateProperties{
-					UltimoCap: &notion.NumberProperty{
+				updateData := notionmng.UpdateProperties{
+					UltimoCap: &notionmng.NumberProperty{
 						Number: chapterFound,
 					},
 					// nil para não alterar a tag atual

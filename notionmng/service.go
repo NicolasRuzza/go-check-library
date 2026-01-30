@@ -1,75 +1,58 @@
-package notionmanager
+package notionmng
 
 import (
 	"encoding/json"
 	"fmt"
 	"go-check-library/httpex"
-	"go-check-library/notion"
 	"io"
 	"net/http"
 )
 
-type NotionManager struct {
+type NotionService struct {
 	Token string
 	DbId  string
 	Http  *httpex.HttpEx
 }
 
-func NewNotionManager(token, dbId string) *NotionManager {
-	return &NotionManager{
+func New(token, dbId string) *NotionService {
+	return &NotionService{
 		Token: token,
 		DbId:  dbId,
 		Http:  httpex.NewHttpEx(),
 	}
 }
 
-func (nmg *NotionManager) QueryBooks() ([]notion.Page, error) {
-	filter := notion.FilterBody{
-		Filter: notion.AndFilter{
-			And: []interface{}{
-				notion.OrFilter{
-					Or: []interface{}{
-						notion.TagFilterSelect{
-							Property: "Tags",
-							Select: notion.Condition{
-								Equals: "Último Cap",
-							},
-						},
-						notion.TagFilterSelect{
-							Property: "Tags",
-							Select: notion.Condition{
-								Equals: "Em Progresso",
-							},
-						},
-						notion.TagFilterSelect{
-							Property: "Tags",
-							Select: notion.Condition{
-								Equals: "Não Lança Cap",
-							},
-						},
-						notion.TagFilterSelect{
-							Property: "Tags",
-							Select: notion.Condition{
-								Equals: "Novo Cap",
-							},
-						},
-						notion.TagFilterSelect{
-							Property: "Tags",
-							Select: notion.Condition{
-								Equals: "Congelado",
-							},
-						},
-					},
+func (nmg *NotionService) QueryBooks() ([]Page, error) {
+	// Tags para serem buscadas
+	targetTags := []string{"Último Cap", "Em Progresso", "Não Lança Cap", "Novo Cap", "Congelado"}
+
+	var orFilters []any
+	for _, tag := range targetTags {
+		orFilters = append(orFilters,
+			TagFilterSelect{
+				Property: "Tags",
+				Select: Condition{
+					Equals: tag,
 				},
-				notion.NumberFilter{
+			},
+		)
+	}
+
+	filter := FilterBody{
+		Filter: AndFilter{
+			And: []any{
+				OrFilter{
+					Or: orFilters,
+				},
+				NumberFilter{
 					Property: "Capítulo",
-					Number: notion.NumberCondition{
+					Number: NumberCondition{
 						GreaterThan: 0,
 					},
 				},
-				notion.URLFilter{
+				URLFilter{
 					Property: "Link",
-					URL: notion.URLCondition{
+					URL: URLCondition{
 						IsNotEmpty: true,
 					},
 				},
@@ -96,7 +79,7 @@ func (nmg *NotionManager) QueryBooks() ([]notion.Page, error) {
 		return nil, fmt.Errorf("Erro API Notion (%d): %s", response.StatusCode, string(body))
 	}
 
-	var result notion.QueryResponse
+	var result QueryResponse
 	err = json.NewDecoder(response.Body).Decode(&result)
 	if err != nil {
 		return nil, err
@@ -105,8 +88,8 @@ func (nmg *NotionManager) QueryBooks() ([]notion.Page, error) {
 	return result.Results, nil
 }
 
-func (nmg *NotionManager) UpdateChapter(pageId string, newData notion.UpdateProperties) error {
-	payload := notion.UpdatePageBody{
+func (nmg *NotionService) UpdateChapter(pageId string, newData UpdateProperties) error {
+	payload := UpdatePageBody{
 		Properties: newData,
 	}
 
@@ -132,10 +115,8 @@ func (nmg *NotionManager) UpdateChapter(pageId string, newData notion.UpdateProp
 	return nil
 }
 
-func (nmg *NotionManager) setNotionHeaders(request *http.Request) error {
+func (nmg *NotionService) setNotionHeaders(request *http.Request) {
 	request.Header.Set("Authorization", "Bearer "+nmg.Token)
 	request.Header.Set("Notion-Version", "2022-06-28")
 	request.Header.Set("Content-Type", "application/json")
-
-	return nil
 }

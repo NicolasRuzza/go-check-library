@@ -1,4 +1,4 @@
-package notion
+package notionmng
 
 // Helpers
 type TitleProperty struct {

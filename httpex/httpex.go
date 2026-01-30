@@ -16,7 +16,7 @@ func NewHttpEx() *HttpEx {
 	return &HttpEx{}
 }
 
-func CreateHttpRequest(method, url string, payload interface{}) (*http.Request, error) {
+func CreateHttpRequest(method, url string, payload any) (*http.Request, error) {
 	var body io.Reader
 
 	if payload != nil {

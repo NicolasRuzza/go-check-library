@@ -37,7 +37,7 @@ func CreateHttpRequest(method, url string, payload any) (*http.Request, error) {
 }
 
 func (httpex *HttpEx) DoWithRetry(request *http.Request) (*http.Response, error) {
-	// Começa com 10 segundos
+	// Comeca com 10 segundos
 	timeout := 10 * time.Second
 	maxRetries := 3
 

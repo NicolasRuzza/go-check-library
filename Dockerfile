@@ -34,5 +34,5 @@ ENV CHROME_BIN=/usr/bin/chromium-browser
 
 WORKDIR /app-run
 
-COPY --from=builder /app/go-check-library .
+COPY --from=dev /app/go-check-library .
 CMD ["./go-check-library"]

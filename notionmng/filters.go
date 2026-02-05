@@ -12,13 +12,13 @@ type OrFilter struct {
 	Or []any `json:"or"`
 }
 
-// Estrutura para colunas tipo "Select" (Caixa única)
+// Estrutura para colunas tipo "Select" (Caixa unica)
 type TagFilterSelect struct {
 	Property string    `json:"property"`
 	Select   Condition `json:"select"`
 }
 
-// Estrutura para colunas tipo "Multi-select" (Várias tags)
+// Estrutura para colunas tipo "Multi-select" (Varias tags)
 type TagFilterMultiSelect struct {
 	Property    string    `json:"property"`
 	MultiSelect Condition `json:"multi_select"`

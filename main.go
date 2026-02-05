@@ -187,7 +187,7 @@ func ScrapAndSave(nmg *notionmng.NotionService, workerId int, jobs <-chan notion
 				UltimoCap: &notionmng.NumberProperty{
 					Number: chapterFound,
 				},
-				// nil para não alterar a tag atual
+				// nil para nao alterar a tag atual
 				Tags: nil,
 			}
 
@@ -207,7 +207,7 @@ func ScrapAndSave(nmg *notionmng.NotionService, workerId int, jobs <-chan notion
 					UltimoCap: &notionmng.NumberProperty{
 						Number: chapterFound,
 					},
-					// nil para não alterar a tag atual
+					// nil para nao alterar a tag atual
 					Tags: nil,
 				}
 

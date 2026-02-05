@@ -16,10 +16,10 @@ func ScrapeStaticPage(url string, cssSelector string) (float64, error) {
 		return 0, fmt.Errorf("Falha ao criar o coletor")
 	}
 
-	// Define o timeout para não ficar travado
+	// Define o timeout para nao ficar travado
 	collector.SetRequestTimeout(30 * time.Second)
 
-	// Antes de cada requisição, sorteia um User-Agent
+	// Antes de cada requisicao, sorteia um User-Agent
 	collector.OnRequest(func(r *colly.Request) {
 		userAgent := getRandomUserAgent()
 

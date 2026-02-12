@@ -3,9 +3,9 @@ package notionmng
 import (
 	"encoding/json"
 	"fmt"
-	"go-check-library/httpex"
-	"io"
+	"go-check-library/pkg/httpex"
 	"net/http"
+	"time"
 )
 
 type NotionService struct {
@@ -18,7 +18,12 @@ func New(token, dbId string) *NotionService {
 	return &NotionService{
 		Token: token,
 		DbId:  dbId,
-		Http:  httpex.NewHttpEx(),
+		Http: httpex.New(httpex.Config{
+			BaseTimeout: 10 * time.Second,
+			MaxRetries:  3,
+			Exponent:    2,
+			RetryWait:   5 * time.Second,
+		}),
 	}
 }
 
@@ -60,7 +65,7 @@ func (nmg *NotionService) QueryBooks() ([]Page, error) {
 		},
 	}
 
-	url := "https://api.notion.com/v1/databases/" + nmg.DbId + "/query"
+	url := fmt.Sprintf("%s/databases/%s/query", NOTION_URL, nmg.DbId)
 	request, err := httpex.CreateHttpRequest("POST", url, filter)
 	if err != nil {
 		return nil, err
@@ -73,11 +78,6 @@ func (nmg *NotionService) QueryBooks() ([]Page, error) {
 		return nil, err
 	}
 	defer response.Body.Close()
-
-	if response.StatusCode != 200 {
-		body, _ := io.ReadAll(response.Body)
-		return nil, fmt.Errorf("Erro API Notion (%d): %s", response.StatusCode, string(body))
-	}
 
 	var result QueryResponse
 	err = json.NewDecoder(response.Body).Decode(&result)
@@ -93,7 +93,7 @@ func (nmg *NotionService) UpdateChapter(pageId string, newData UpdateProperties)
 		Properties: newData,
 	}
 
-	url := "https://api.notion.com/v1/pages/" + pageId
+	url := fmt.Sprintf("%s/pages/%s", NOTION_URL, pageId)
 	request, err := httpex.CreateHttpRequest("PATCH", url, payload)
 	if err != nil {
 		return err
@@ -107,16 +107,10 @@ func (nmg *NotionService) UpdateChapter(pageId string, newData UpdateProperties)
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode != 200 {
-		body, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("Erro notion update (%d): %s", response.StatusCode, string(body))
-	}
-
 	return nil
 }
 
 func (nmg *NotionService) setNotionHeaders(request *http.Request) {
 	request.Header.Set("Authorization", "Bearer "+nmg.Token)
 	request.Header.Set("Notion-Version", "2022-06-28")
-	request.Header.Set("Content-Type", "application/json")
 }

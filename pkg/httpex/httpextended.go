@@ -10,10 +10,24 @@ import (
 )
 
 type HttpEx struct {
+	config Config
 }
 
-func NewHttpEx() *HttpEx {
-	return &HttpEx{}
+func New(cfg Config) *HttpEx {
+	if cfg.BaseTimeout == 0 {
+		cfg.BaseTimeout = 10 * time.Second
+	}
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = 3
+	}
+	if cfg.Exponent == 0 {
+		cfg.Exponent = 2
+	}
+	if cfg.RetryWait == 0 {
+		cfg.RetryWait = 5
+	}
+
+	return &HttpEx{config: cfg}
 }
 
 func CreateHttpRequest(method, url string, payload any) (*http.Request, error) {
@@ -33,13 +47,17 @@ func CreateHttpRequest(method, url string, payload any) (*http.Request, error) {
 		return nil, err
 	}
 
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+
 	return request, nil
 }
 
 func (httpex *HttpEx) DoWithRetry(request *http.Request) (*http.Response, error) {
 	// Comeca com 10 segundos
-	timeout := 10 * time.Second
-	maxRetries := 3
+	timeout := httpex.config.BaseTimeout * time.Second
+	maxRetries := httpex.config.MaxRetries
 
 	var lastErr error
 
@@ -50,7 +68,8 @@ func (httpex *HttpEx) DoWithRetry(request *http.Request) (*http.Response, error)
 
 		response, err := client.Do(request)
 
-		if err == nil && response.StatusCode == 200 {
+		// 2xx
+		if err == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
 			return response, nil
 		}
 
@@ -58,7 +77,9 @@ func (httpex *HttpEx) DoWithRetry(request *http.Request) (*http.Response, error)
 
 		msgErro := "Erro de conexao"
 		if response != nil {
-			body, _ := io.ReadAll(response.Body)
+			// Limita leitura do erro a 4KB para nao estourar memoria com um html gigante
+			limitReader := io.LimitReader(response.Body, 4096)
+			body, _ := io.ReadAll(limitReader)
 			response.Body.Close()
 
 			msgErro = fmt.Sprintf("Status %d: %s", response.StatusCode, string(body))
@@ -72,18 +93,23 @@ func (httpex *HttpEx) DoWithRetry(request *http.Request) (*http.Response, error)
 			break
 		}
 
-		timeout = timeout * 5
+		timeout = timeout * time.Duration(httpex.config.Exponent)
 
 		// Resetar o Body da requisicao
 		// Como o Go le o body ao enviar, se enviar de novo sem resetar,
 		// ele vai enviar um corpo vazio. O GetBody recria o leitor.
-		if request.GetBody != nil {
-			newBody, _ := request.GetBody()
+		if request.GetBody != nil && request.Body != nil {
+			newBody, err := request.GetBody()
+
+			if err != nil {
+				return nil, fmt.Errorf("Não foi possível reconstruir o corpo da requisição para retry: %w", err)
+			}
+
 			request.Body = newBody
 		}
 
 		fmt.Printf("Tentando novamente com timeout de %v...\n", timeout)
-		time.Sleep(2 * time.Second)
+		time.Sleep(httpex.config.RetryWait * time.Second)
 	}
 
 	return nil, fmt.Errorf("Falha apos todas as tentativas. Ultimo erro: %v", lastErr)

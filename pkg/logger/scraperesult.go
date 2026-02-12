@@ -2,7 +2,7 @@ package logger
 
 import (
 	"fmt"
-	"go-check-library/utils"
+	"go-check-library/pkg/utils"
 )
 
 type ScrapeResult struct {

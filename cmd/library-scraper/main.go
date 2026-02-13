@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
+	"go-check-library/internal/notification"
 	"go-check-library/internal/notionmng"
 	"go-check-library/pkg/logger"
-	"go-check-library/pkg/notification"
 	"go-check-library/pkg/scraper"
 	"log"
 	"math/rand"

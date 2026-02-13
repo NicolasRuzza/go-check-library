@@ -18,13 +18,17 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '>=1.25' #1.25 ou maior
+          go-version: '1.25' #1.25 ou maior
+          cache: true # Deixa as bibliotecas usadas em cache
 
       - name: Download Dependencies
         run: go mod download
 
+      - name: Run Tests
+        run: go test -v ./... # Roda os arquivos *_test.go
+
       - name: Verify Build
-        run: go build -v ./...
+        run: go build -v ./cmd/library-scraper/main.go
 
   docker-check:
     name: Check Docker Build
@@ -39,10 +43,12 @@ jobs:
 
       - name: Build Docker Image
         # Tenta buildar o Dockerfile inteiro
-        # Bloqueia o push para o docker hub
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: false
+          push: false # Bloqueia o push para o docker hub
           tags: notion-scraper:test
+          # Cache para lembrar do alpine e do chromium
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

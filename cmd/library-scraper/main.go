@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	"go-check-library/logger"
-	"go-check-library/notion"
-	notionmanager "go-check-library/notion_manager"
-	"go-check-library/scraper"
+	"go-check-library/internal/notification"
+	"go-check-library/internal/notionmng"
+	"go-check-library/pkg/logger"
+	"go-check-library/pkg/scraper"
 	"log"
 	"math/rand"
 	"os"
@@ -39,14 +39,16 @@ var siteConfigs = map[string]SiteConfig{
 func main() {
 	token := os.Getenv("NOTION_TOKEN")
 	dbId := os.Getenv("DATABASE_ID")
+	topic := os.Getenv("NTFY_TOPIC")
 
-	if token == "" || dbId == "" {
-		log.Fatal("Defina NOTION_TOKEN e DATABASE_ID")
+	if token == "" || dbId == "" || topic == "" {
+		log.Fatal("Lembre-se de definir NOTION_TOKEN, DATABASE_ID e NTFY_TOPIC")
 	}
 
-	nmg := notionmanager.NewNotionManager(token, dbId)
+	nmg := notionmng.New(token, dbId)
+	ntfnSender := notification.New(topic)
 
-	fmt.Println("Buscando no Notion...")
+	fmt.Println("Buscando no notionmng...")
 
 	// 3. Buscar Dados
 	pages, err := nmg.QueryBooks()
@@ -57,14 +59,14 @@ func main() {
 	totalBooks := len(pages)
 	fmt.Printf("Encontrados: %d obras para verificar.\n", totalBooks)
 
-	jobs := make(chan notion.Page, totalBooks)
+	jobs := make(chan notionmng.Page, totalBooks)
 	results := make(chan logger.ScrapeResult, totalBooks)
 
 	var wg sync.WaitGroup
 
 	for i := 1; i <= NumWorkers; i++ {
 		wg.Add(1)
-		go ScrapAndSave(nmg, i, jobs, results, &wg)
+		go ScrapAndSave(nmg, i, jobs, results, &wg, ntfnSender)
 	}
 
 	for _, page := range pages {
@@ -77,6 +79,10 @@ func main() {
 		close(results)
 	}()
 
+	processResults(results)
+}
+
+func processResults(results <-chan logger.ScrapeResult) {
 	var allResults []logger.ScrapeResult
 	var errors []logger.ScrapeResult
 	var updates []logger.ScrapeResult
@@ -118,7 +124,7 @@ func main() {
 	}
 }
 
-func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan notion.Page, results chan<- logger.ScrapeResult, wg *sync.WaitGroup) {
+func ScrapAndSave(nmg *notionmng.NotionService, workerId int, jobs <-chan notionmng.Page, results chan<- logger.ScrapeResult, wg *sync.WaitGroup, ntfnSender *notification.NotificationService) {
 	defer wg.Done()
 
 	for page := range jobs {
@@ -157,74 +163,85 @@ func ScrapAndSave(nmg *notionmanager.NotionManager, workerId int, jobs <-chan no
 		}
 
 		if err != nil {
+			ntfnSender.NotifyError(err, fmt.Sprintf("Scraper: %s", title))
+
 			resultBase.Type = logger.ERROR
 			resultBase.Message = fmt.Sprintf("Falha no Scraper: %v", err)
 			results <- resultBase
 			continue
 		}
 
-		if chapterFound > lastKnownChapter && chapterFound > props.Capitulo.Number {
-			updateData := notion.UpdateProperties{
-				UltimoCap: &notion.NumberProperty{
+		var updateData *notionmng.UpdateProperties // quando tem ponteiro, ja eh inicializado nil
+
+		notificationType := notification.NONE
+
+		if chapterFound != lastKnownChapter {
+			updateData = &notionmng.UpdateProperties{
+				UltimoCap: &notionmng.NumberProperty{
 					Number: chapterFound,
 				},
-				Tags: &notion.SelectProperty{
-					Select: notion.SelectOption{Name: "Novo Cap"},
-				},
 			}
 
-			err := nmg.UpdateChapter(page.ID, updateData)
-			if err != nil {
-				resultBase.Type = logger.ERROR
-				resultBase.Message = fmt.Sprintf("Erro ao atualizar novo: %v", err)
-			} else {
-				resultBase.Type = logger.SUCCESS
-				resultBase.Message = fmt.Sprintf("Atualizado! %.1f -> %.1f", lastKnownChapter, chapterFound)
-			}
+			if chapterFound > lastKnownChapter && chapterFound > props.Capitulo.Number {
+				notificationType = notification.NEW
 
-			results <- resultBase
-		} else if lastKnownChapter == 0 {
-			updateData := notion.UpdateProperties{
-				UltimoCap: &notion.NumberProperty{
-					Number: chapterFound,
-				},
-				// nil para não alterar a tag atual
-				Tags: nil,
-			}
-
-			err := nmg.UpdateChapter(page.ID, updateData)
-			if err != nil {
-				resultBase.Type = logger.ERROR
-				resultBase.Message = fmt.Sprintf("Erro ao salvar (1ª carga): %v", err)
-			} else {
-				resultBase.Type = logger.SUCCESS
-				resultBase.Message = fmt.Sprintf("Primeira sincronização: Cap %.1f", chapterFound)
-			}
-
-			results <- resultBase
-		} else {
-			if chapterFound != lastKnownChapter {
-				updateData := notion.UpdateProperties{
-					UltimoCap: &notion.NumberProperty{
-						Number: chapterFound,
-					},
-					// nil para não alterar a tag atual
-					Tags: nil,
+				updateData.Tags = &notionmng.SelectProperty{
+					Select: notionmng.SelectOption{Name: "Novo Cap"},
 				}
+			} else if lastKnownChapter == 0 {
+				// Primeira Carga -> Omite 'tag'
+				notificationType = notification.FIRST
 
-				err := nmg.UpdateChapter(page.ID, updateData)
+			} else {
+				// Correcao (chapterFound != lastKnownChapter) -> Omite 'tag'
+				notificationType = notification.FIX
+			}
+		}
+
+		if updateData != nil {
+			err := nmg.UpdateChapter(page.ID, *updateData)
+			if err != nil {
+				resultBase.Type = logger.ERROR
+			}
+
+			switch notificationType {
+			case notification.NEW:
 				if err != nil {
-					resultBase.Type = logger.ERROR
-					resultBase.Message = fmt.Sprintf("Erro ao salvar (1ª carga): %v", err)
-					results <- resultBase
-					continue
+					ntfnSender.NotifyError(err, fmt.Sprintf("Notion Update: %s", title))
+					resultBase.Message = fmt.Sprintf("Erro ao atualizar novo: %v", err)
+				} else {
+					ntfnSender.NotifyNewChapter(title, chapterFound, url)
+
+					resultBase.Type = logger.SUCCESS
+					resultBase.Message = fmt.Sprintf("Atualizado! %.1f -> %.1f", lastKnownChapter, chapterFound)
+				}
+			case notification.FIRST:
+				if err != nil {
+					ntfnSender.NotifyError(err, fmt.Sprintf("Primeira Carga: %s", title))
+					resultBase.Message = fmt.Sprintf("Erro ao salvar (primeira carga): %v", err)
+				} else {
+					ntfnSender.NotifyInfo("Sincronizado", fmt.Sprintf("Primeira carga. %s iniciado no cap %.1f", title, chapterFound))
+
+					resultBase.Type = logger.SUCCESS
+					resultBase.Message = fmt.Sprintf("Primeira sincronização: Cap %.1f", chapterFound)
+				}
+			case notification.FIX:
+				if err != nil {
+					ntfnSender.NotifyError(err, fmt.Sprintf("Correção Notion: %s", title))
+					resultBase.Message = fmt.Sprintf("Erro ao salvar (primeira carga): %v", err)
+				} else {
+					ntfnSender.NotifyInfo("Sincronizado", fmt.Sprintf("Corrigindo último capítulo conhecido. %s reiniciado no cap %.1f", title, chapterFound))
+
+					resultBase.Type = logger.INFO
+					resultBase.Message = fmt.Sprintf("Correção de sync: %.1f -> %.1f", lastKnownChapter, chapterFound)
 				}
 			}
-
+		} else {
 			resultBase.Type = logger.INFO
 			resultBase.Message = fmt.Sprintf("Nada novo. (Site: %.1f | Notion: %.1f)", chapterFound, lastKnownChapter)
-			results <- resultBase
 		}
+
+		results <- resultBase
 
 		// rand.Intn(3) retorna 0, 1 ou 2. Somando 3, temos 3, 4 ou 5.
 		randomDelay := time.Duration(3+rand.Intn(3)) * time.Second

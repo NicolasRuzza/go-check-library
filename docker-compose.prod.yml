@@ -7,8 +7,10 @@ services:
     image: notion-scraper:prod
     container_name: go_notion_scraper_prod
     
-    env_file:
-      - .env
+    environment:
+      - NOTION_TOKEN=${NOTION_TOKEN}
+      - DATABASE_ID=${DATABASE_ID}
+      - NTFY_TOPIC=${NTFY_TOPIC}
     
     restart: always
 

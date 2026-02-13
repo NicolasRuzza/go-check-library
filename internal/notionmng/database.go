@@ -1,4 +1,4 @@
-package notion
+package notionmng
 
 // Estruturas de RESPOSTA (O que o Notion devolve)
 type QueryResponse struct {

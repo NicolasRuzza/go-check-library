@@ -22,7 +22,7 @@ func ScrapeDynamicPage(url string, selector string) (float64, error) {
 	)
 
 	// Verifica se existe uma variavel de ambiente dizendo onde o Chrome esta.
-	// No Dockerfile é definido CHROME_BIN=/usr/bin/chromium-browser
+	// No Dockerfile eh definido CHROME_BIN=/usr/bin/chromium-browser
 	chromeBin := os.Getenv("CHROME_BIN")
 	if chromeBin != "" {
 		opts = append(opts, chromedp.ExecPath(chromeBin))

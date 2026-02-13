@@ -1,4 +1,4 @@
-package notion
+package notionmng
 
 type UpdatePageBody struct {
 	Properties UpdateProperties `json:"properties"`

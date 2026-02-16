@@ -32,5 +32,5 @@ const (
 const (
 	NOTIFICATION_URL = "https://ntfy.sh/"
 	// O ntfy so consegue usar uma url como icone, logo eu fiz um commit so da imagem e agora estou usando-a
-	PROJECT_ICON_URL = "https://github.com/NicolasRuzza/go-check-library/blob/feature/notification/assets/icon.png?raw=true"
+	PROJECT_ICON_URL = "https://github.com/NicolasRuzza/go-check-library/blob/v0.1.0/assets/icon.png?raw=true"
 )
